@@ -1,0 +1,23 @@
+{
+  "name": "aesthetxt",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.4.0",
+    "@types/p5": "^1.6.2",
+    "@types/wicg-file-system-access": "^2020.9.6",
+    "typescript": "^5.0.2",
+    "vite": "^4.3.9"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^1.4.0",
+    "p5": "^1.6.0"
+  }
+}
