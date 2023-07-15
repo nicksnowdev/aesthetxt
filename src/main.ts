@@ -6,15 +6,16 @@ import { appWindow, WebviewWindow } from '@tauri-apps/api/window';
 import { exists, readTextFile, writeTextFile, removeFile, BaseDirectory } from '@tauri-apps/api/fs';
 import p5 from 'p5';
 
+// initial tauri app setup
+
 // invoke a command to launch the sketch (ensures the window is ready)
-invoke('ready', {})
-  // `invoke` returns a Promise
-  .then(() => {
-    new p5(sketch);
-  });
+invoke('ready', {}).then(() => {
+  new p5(sketch);
+});
 
+// this variable keeps track of any launch arguments (open file with aesthetxt)
+// if no argument is supplied, it defaults to 'false'
 let openedWith: string;
-
 getMatches().then((matches) => {
   // do something with the { args, subcommand } matches
   openedWith = <string>matches.args.source.value + '';
@@ -26,7 +27,7 @@ getMatches().then((matches) => {
 //
 //
 //
-//
+// end tauri setup
 //
 //
 //
@@ -34,71 +35,61 @@ getMatches().then((matches) => {
 //
 //
 
-// the application
+// the p5 application
 const sketch = (p5: p5) => {
-  p5.disableFriendlyErrors = true;
-  // resources
+  // little p5 things
+  p5.disableFriendlyErrors = true; // for speed
+  // independent graphics objects for the window and the text itself in addition to the main canvas
+  // this 3-layer architecture is baked into every theme.
   let textGraphics: p5.Graphics;
   let windowGraphics: p5.Graphics;
-  let perlinChroma: p5.Shader;
-  let perlinGlow: p5.Shader;
-
-  // other
-  let halfWidth: number; // deal with WebGL's center origin
-  let halfHeight: number;
-  let scaleFactor: number;
-
-  enum Themes {
-    dark_chroma,
-  }
-  let theme = Themes.dark_chroma;
-  let clock = 0; // tick animations
-
-  // dark chroma visuals
-  let energy = 0;
-  let split = 1;
-  let pageMargin = split * 2;
-  let twist: number;
-  let speed = 1; // THIS IS BASICALLY JUST A CONSTANT (use to adjust underlying animation speed)
-  let cornerRadius = pageMargin * 3;
-  let p1x: number;
-  let p1y: number;
-  let p2x: number;
-  let p2y: number;
-  let p3x: number;
-  let p3y: number;
-  let growthRate = 0.05;
-  let typeClock = 0;
-  let typeClockSmooth = 0;
-  let typeDelay = 240;
-  let decayRate = 0.02;
-  // use this to scale the window effect, 0-3 works best
-  const setEnergy = (level: number) => {
-    energy = Math.min(Math.max(level, 0), 3);
-    split = energy;
-    twist = p5.atan((split * 2) / p5.max(p5.width, p5.height));
-    pageMargin = split * 2;
-    cornerRadius = pageMargin * 3;
+  // WebGL window sizing shenanigans
+  let hw: number; // half width
+  let hh: number; // half height
+  let sf: number; // scale factor
+  // for maintaining properly-scaled graphics
+  const setAppRes = (r: number) => {
+    p5.pixelDensity(r); // make the text look as crisp as possible;
+    textGraphics.pixelDensity(r);
+    windowGraphics.pixelDensity(r);
+    sf = r; // used to set caret thickness
+    p5.windowResized();
   };
-  let saveFlashStr = 100; // up to 150 has an effect on the current title bar color
-  let saveFlash = saveFlashStr;
 
-  // text stuff
-  let textMarginLeft = 32;
+  //
+  //
+  //
+  //
+  //
+  //
+  // text engine initialization
+  //
+  //
+  //
+  //
+  //
+  //
+
+  // text engine variables
+
   let fontSize = 16;
   let lineH = fontSize * 1.25;
-  let textMarginTop = 41.9 + fontSize;
   let charW: number;
+  let textMarginLeft = 32;
+  let textMarginTop = 41.9 + fontSize;
   let caretLine = 0;
   let caretChar = 0;
   let mouseLine: number;
   let mouseChar: number;
   let caretVertChar: number; // this remembers the last caretChar while navigating vertically
-  let caretX: number;
-  let caretY: number;
   let caretVisible = document.hasFocus();
-  let caretClock = 0;
-  let mouseClock = 0;
+  let caretClock = 0; // for blinking the caret
+  let mouseClock = 0; // for detecting multi clicks
+  let scroll = 0; // actual scroll coordinate
+  let scrollInterp = 0; // used to smooth scrolling when using a mouse wheel
+  let editableLines: number;
+  let scrollTicking = false; // used to throttle mouse wheel events
+  let scrollDy: number; // scroll direction
   let selection = {
     active: false,
     begin: { ch: 0, ln: 0 },
@@ -107,17 +98,11 @@ const sketch = (p5: p5) => {
     word: false,
     line: false,
   };
-  let scroll = 0;
-  let scrollInterp = 0; // used to smooth scrolling when using a mouse wheel
-  let editableLines: number;
-  let ticking = false; // used to throttle mouse wheel events
-  let dy: number; // scroll direction
-
   // coordinates used in drawing selection
   let sx: number;
   let sy: number;
-  let w: number;
-  // object to store states of modifier keys (and an interface because typescript wants me to suffer now instead of later)
+  let sw: number;
+  // object to store states of modifier keys
   interface Imodifiers {
     Control: boolean;
     Meta: boolean;
@@ -125,7 +110,6 @@ const sketch = (p5: p5) => {
     Mouse1: boolean;
     DubClick: boolean;
     TripClick: boolean;
-    Resizing: boolean;
   }
   const modifiers = {
     Control: false,
@@ -134,10 +118,31 @@ const sketch = (p5: p5) => {
     Mouse1: false,
     DubClick: false,
     TripClick: false,
-    Resizing: false,
   };
-
-  // undo/redo
+  // mostly file stuff
+  let lb: string; // line break characters
+  let lbl: number; // number of line break characters
+  let editorFont: p5.Font;
+  let loadedText = ['']; // default new file content
+  let loadedFileName = 'untitled.txt'; // default new file name
+  let fileHandle: FileSystemFileHandle; // holds files opened with JS
+  let saved = false; // keeps track of w/n there are unsaved changes
+  let savedAs = false; // keeps track of w/n the current file exists on the hard drive
+  let saveDirect = false; // keeps track of w/n the current file was opened directly and needs to be saved as such
+  let directPath = ''; // keeps track of the path to a directly-opened file, if there is one
+  let saveEffect = false; // this is set to true on saving / loading to trigger a visual effect
+  // used in openFile and saveFile functions
+  const openOpts = {
+    types: [{ description: 'Plain text', accept: { 'text/plain': ['.txt'] } }],
+    excludeAcceptAllOption: true,
+    multiple: false,
+  };
+  const saveOpts = {
+    types: [{ description: 'Plain text', accept: { 'text/plain': ['.txt'] } }],
+    excludeAcceptAllOption: true,
+    suggestedName: '',
+  };
+  // undo/redo command class and history array
   const commandHistory: any[] = [];
   let commandIndex = -1;
   class Command {
@@ -145,12 +150,12 @@ const sketch = (p5: p5) => {
     funcArgs: any;
     inverse: Function;
     inverseArgs: any;
-    cLN: number;
-    cCH: number;
-    sbLN: number;
-    sbCH: number;
-    open: boolean;
-    undoForward: boolean;
+    cLN: number; // caret line
+    cCH: number; // caret character
+    sbLN: number; // selection begin line
+    sbCH: number; // selection begin character
+    open: boolean; // is this command currently additive
+    undoForward: boolean; // some commands move the caret backwards
     redoForward: boolean;
     constructor(
       func: Function,
@@ -209,26 +214,14 @@ const sketch = (p5: p5) => {
     }
   }
 
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
+  // text engine functions
 
+  // remove all undo entries ahead of the current index
   const clearFuture = () => {
     while (commandIndex < commandHistory.length - 1) {
       commandHistory.pop(); // remove
     }
   };
-
   // simple function for typing text anywhere in the document
   const typeText = (doc: string[], text: string, log = true) => {
     let lc = doc[caretLine]; // get line content
@@ -280,7 +273,6 @@ const sketch = (p5: p5) => {
       }
     }
   };
-
   // functions to measure a multi-line string
   const textTopW = (t: string) => {
     let l = t.indexOf(lb);
@@ -302,7 +294,7 @@ const sketch = (p5: p5) => {
     let l = (t.match(new RegExp(lb, 'g')) || []).length;
     return l; // THIS RETURNS THE NUMBER OF LINE BREAKS
   };
-
+  // this types multiple lines of text at a time
   const typeRange = (doc: string[], text: string, log = true) => {
     let theText = text;
     if (theText == '') theText = lb; // this fixes the issue of undoing the deletion of a line break
@@ -354,14 +346,14 @@ const sketch = (p5: p5) => {
       else commandHistory.shift();
     }
   };
-
+  // called by the paste event listener
   const paste = (doc: string[]) => {
     if (commandHistory.length > 0) commandHistory[commandIndex].open = false; // paste in a separate undo layer
     navigator.clipboard.readText().then((t) => {
       typeRange(doc, t);
     });
   };
-
+  // self-explanatory name... i really don't know how this ended up over 70 lines long
   const deleteChar = (doc: string[], log = true) => {
     let lc = doc[caretLine];
     let newLC: string;
@@ -435,7 +427,6 @@ const sketch = (p5: p5) => {
       }
     }
   };
-
   const deleteRange = (doc: string[], log = true) => {
     let lc: string;
     let newLC: string;
@@ -510,7 +501,7 @@ const sketch = (p5: p5) => {
       else commandHistory.shift();
     }
   };
-
+  // special function for adding lines to the array
   const typeEnter = (doc: string[], log = true) => {
     if (caretChar > 0 && caretChar < doc[caretLine].length) {
       doc.splice(caretLine + 1, 0, doc[caretLine].slice(caretChar));
@@ -559,7 +550,8 @@ const sketch = (p5: p5) => {
       }
     }
   };
-
+  // this is used for copying selections, also a few other things.
+  // it converts a section of text from the array into a single string
   const getRange = (doc: string[]) => {
     let theText = '';
     if (selection.begin.ln == caretLine) {
@@ -586,7 +578,7 @@ const sketch = (p5: p5) => {
     }
     return theText;
   };
-
+  // like get range but shortcutted to just grab the entire body of text
   const getDocString = (doc: string[]) => {
     let theText = '';
     for (let i = 0; i < doc.length - 1; i++) {
@@ -595,11 +587,11 @@ const sketch = (p5: p5) => {
     theText += doc[doc.length - 1];
     return theText;
   };
-
+  // called by the copy event listener
   const copyRange = (doc: string[]) => {
     navigator.clipboard.writeText(getRange(doc));
   };
-
+  // when stuff happens outside the current FoV, this automatically goes to it.
   const autoscroll = () => {
     while (caretLine - scroll < 0) {
       scroll--;
@@ -608,8 +600,7 @@ const sketch = (p5: p5) => {
       scroll++;
     }
   };
-
-  // this is it's own function because it needs to be called while selecting outside the window
+  // this is it's own function because it needs to be called remotely while selecting outside the window
   const mouseMoved = (doc: string[]) => {
     // dubclick and tripclick imply a word or line selection is already active
     if (modifiers.DubClick) {
@@ -696,21 +687,9 @@ const sketch = (p5: p5) => {
     caretClock = 0;
   };
 
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
+  // file i/o functions
 
-  // file stuff
+  // until i start builoding for other platforms, this is barely used
   const osDetect = () => {
     let os = navigator.userAgent;
     let finalOs = '';
@@ -725,39 +704,10 @@ const sketch = (p5: p5) => {
     }
     return finalOs;
   };
-  let lb: string;
-  let lbl: number;
-  if (osDetect() == 'Windows') {
-    lb = '\r\n';
-    lbl = 2;
-  } else {
-    lb = '\n';
-    lbl = 1;
-  }
-  let fontFira: p5.Font;
-  let loadedText = [''];
-  let loadedFileName = 'untitled.txt';
-  let fileHandle: FileSystemFileHandle;
-  let saved = false;
-  let savedAs = false;
-  let saveDirect = false;
-  let directPath = '';
-  let openOpts = {
-    types: [{ description: 'Plain text', accept: { 'text/plain': ['.txt'] } }],
-    excludeAcceptAllOption: true,
-    multiple: false,
-  };
-  const saveOpts = {
-    types: [{ description: 'Plain text', accept: { 'text/plain': ['.txt'] } }],
-    excludeAcceptAllOption: true,
-    suggestedName: '',
-  };
-
+  // make app visible once it's ready
   const showApp = () => {
-    // make app visible once it's ready
     document.documentElement.style.setProperty('visibility', 'visible');
   };
-
   const openFile = (init = false, path = '') => {
     if (path != '') {
       showApp();
@@ -773,7 +723,7 @@ const sketch = (p5: p5) => {
         saveDirect = true;
         directPath = path;
         appWindow.setTitle(loadedFileName + ' - aesthetxt');
-        saveFlash = saveFlashStr; // not a save but i like this effect
+        saveEffect = true; // not a save but i like this effect
       });
     } else {
       if (!savedAs && loadedText.length == 1 && loadedText[0] == '') {
@@ -809,24 +759,22 @@ const sketch = (p5: p5) => {
       }
     }
   };
-
   const saveFile = () => {
     if (saveDirect) {
       // if opened with a file, use a different save method
       writeTextFile(directPath, getDocString(loadedText));
       saved = true;
-      saveFlash = saveFlashStr;
+      saveEffect = true;
     } else {
       fileHandle.createWritable().then((w) => {
         w.write(getDocString(loadedText)).then(() => {
           w.close();
           saved = true;
-          saveFlash = saveFlashStr;
+          saveEffect = true;
         });
       });
     }
   };
-
   const saveFileAs = () => {
     window.showSaveFilePicker(saveOpts).then((fsfh) => {
       fileHandle = fsfh;
@@ -837,12 +785,11 @@ const sketch = (p5: p5) => {
           saved = true;
           savedAs = true;
           appWindow.setTitle(loadedFileName + ' - aesthetxt');
-          saveFlash = saveFlashStr;
+          saveEffect = true;
         });
       });
     });
   };
-
   const newFile = (explicit = false) => {
     if (explicit) {
       // create this file in case the parent window was opened directly
@@ -873,7 +820,7 @@ const sketch = (p5: p5) => {
       });
     }
   };
-
+  // anything that would cause the window to close calls this function instead
   const confirmClose = () => {
     if (loadedText.length > 1 || loadedText[0] != '' || savedAs) {
       if (!saved) {
@@ -897,6 +844,7 @@ const sketch = (p5: p5) => {
 
   //
   //
+  // end text engine initialization
   //
   //
   //
@@ -904,10 +852,64 @@ const sketch = (p5: p5) => {
   //
   //
   //
+  // Theme initialization
+  //
+  //
+
+  // Theme-specific stuff
+
+  enum Themes {
+    dark_chroma,
+  }
+  let theme = Themes.dark_chroma; // default theme
+
+  // dark chroma visuals
+  let perlinChroma: p5.Shader; // shaders
+  let perlinGlow: p5.Shader;
+  let energy = 0; // energy level
+  let energyClock = 0; // for energy animations
+  let split = 1;
+  let pageMargin = split * 2;
+  let twist: number;
+  let speed = 1; // THIS IS BASICALLY JUST A CONSTANT (use to adjust underlying animation speed)
+  let cornerRadius = pageMargin * 3;
+  let p1x: number; // layered window positioning stuff
+  let p1y: number;
+  let p2x: number;
+  let p2y: number;
+  let p3x: number;
+  let p3y: number;
+  let growthRate = 0.05;
+  let typeClock = 0;
+  let typeClockSmooth = 0;
+  let typeDelay = 240;
+  let decayRate = 0.02;
+  let saveFlashStr = 100; // up to 150 has an effect on the current title bar color
+  let saveFlash = saveFlashStr;
+  // use this to scale the window effect, 0-3 works best
+  const setEnergy = (level: number) => {
+    energy = Math.min(Math.max(level, 0), 3);
+    split = energy;
+    twist = p5.atan((split * 2) / p5.max(p5.width, p5.height));
+    pageMargin = split * 2;
+    cornerRadius = pageMargin * 3;
+  };
+
+  //
+  //
+  // end theme initialization
   //
   //
   //
   //
+  //
+  //
+  //
+  // begin p5 core
+  //
+  //
+
+  // p5 core
 
   // load shaders and fonts
   p5.preload = () => {
@@ -918,50 +920,42 @@ const sketch = (p5: p5) => {
     );
     perlinGlow = p5.loadShader('/shaders/perlin_glow/vert.glsl', '/shaders/perlin_glow/frag.glsl');
 
-    // load fonts
-    fontFira = p5.loadFont('/fonts/FiraCode-Light.ttf');
+    // load font
+    editorFont = p5.loadFont('/fonts/FiraCode-Light.ttf');
   };
 
   // called whenever the window is resized
   p5.windowResized = () => {
-    // keep halfWidth and halfHeight whole numbers
-    let w = (p5.floor(p5.windowWidth * scaleFactor * 0.5) * 2) / scaleFactor;
-    let h = (p5.floor(p5.windowHeight * scaleFactor * 0.5) * 2) / scaleFactor;
+    // keep hw and hh whole numbers
+    let w = (p5.floor(p5.windowWidth * sf * 0.5) * 2) / sf;
+    let h = (p5.floor(p5.windowHeight * sf * 0.5) * 2) / sf;
 
     // resize all graphics objects
     p5.resizeCanvas(w, h);
     textGraphics.resizeCanvas(w, h);
     windowGraphics.resizeCanvas(w, h);
-    halfWidth = p5.width * 0.5;
-    halfHeight = p5.height * 0.5;
+    hw = p5.width * 0.5;
+    hh = p5.height * 0.5;
     twist = p5.atan((split * 2) / p5.max(p5.width, p5.height)); // prevent twist from clipping on window boundaries
     editableLines = Math.floor((p5.height - textMarginTop - lineH * 0.5) / lineH);
   };
 
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-  //
-
-  const setAppRes = (r: number) => {
-    p5.pixelDensity(r); // make the text look as crisp as possible;
-    textGraphics.pixelDensity(r);
-    windowGraphics.pixelDensity(r);
-    scaleFactor = r; // used to set caret thickness
-    p5.windowResized();
-  };
-
   // runs once at beginning
   p5.setup = () => {
+    //
+    //
+    //
+    //
+    //
+    //
+    // begin p5 setup
+    //
+    //
+    //
+    //
+    //
+    //
+
     // create up graphics
     p5.createCanvas(1, 1, p5.WEBGL); // 3D mode to allow shaders
     textGraphics = p5.createGraphics(p5.width, p5.height, p5.WEBGL); // create a 3D graphics buffer
@@ -985,7 +979,7 @@ const sketch = (p5: p5) => {
     textGraphics.background(0, 0); // initialize to 'clear'
     windowGraphics.background(0, 0); // initialize to 'clear'
     // prepare font drawing
-    textGraphics.textFont(fontFira);
+    textGraphics.textFont(editorFont);
     textGraphics.textSize(fontSize);
     textGraphics.noStroke();
     charW = textGraphics.textWidth(' ');
@@ -999,27 +993,22 @@ const sketch = (p5: p5) => {
       });
     });
 
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
+    // determine style of line break
+    if (osDetect() == 'Windows') {
+      lb = '\r\n';
+      lbl = 2;
+    } else {
+      lb = '\n';
+      lbl = 1;
+    }
 
     // add event listeners
+
     // custom context menu
     document.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       // everything else goes here
     });
-
     // title bar functions
     document
       .getElementById('titlebar-minimize')!
@@ -1027,11 +1016,16 @@ const sketch = (p5: p5) => {
     document
       .getElementById('titlebar-maximize')!
       .addEventListener('click', () => appWindow.toggleMaximize());
-    // replace this one with prompt to save work
     document.getElementById('titlebar-close')!.addEventListener('click', () => confirmClose());
-
-    // move caret with mouse
-    document.getElementById('defaultCanvas0')?.addEventListener('mousedown', () => {
+    // blur / focus
+    window.addEventListener('blur', () => {
+      caretVisible = false;
+    });
+    window.addEventListener('focus', () => {
+      caretVisible = true;
+    });
+    // mouse inputs
+    document.getElementById('defaultCanvas0')!.addEventListener('mousedown', () => {
       // detect mouse click within margins
       if (
         p5.mouseX > pageMargin - 10 &&
@@ -1294,46 +1288,35 @@ const sketch = (p5: p5) => {
         autoscroll();
       }
     });
-
     window.addEventListener('mouseup', () => {
       modifiers.Mouse1 = false;
       modifiers.TripClick = false;
-      modifiers.Resizing = false;
     });
-
     window.addEventListener('mousemove', () => {
       // 'if clicking and dragging'
       if (modifiers.Mouse1) {
         mouseMoved(loadedText);
       }
     });
-
-    // respond to mousewheel for scrolling
     document.addEventListener('wheel', (e) => {
-      dy = e.deltaY;
-      if (!ticking) {
+      scrollDy = e.deltaY;
+      if (!scrollTicking) {
         window.requestAnimationFrame(() => {
           // if likely a mouse wheel, scroll a 2 line interval and snap to grid
-          if (Math.abs(dy) >= 100) {
+          if (Math.abs(scrollDy) >= 100) {
             scroll = Math.round(
-              Math.min(Math.max(scroll + Math.sign(dy) * 3, 0), loadedText.length - 1)
+              Math.min(Math.max(scroll + Math.sign(scrollDy) * 3, 0), loadedText.length - 1)
             );
           } else {
-            scroll = Math.min(Math.max(scroll + dy / 60, 0), loadedText.length - 1);
+            scroll = Math.min(Math.max(scroll + scrollDy / 60, 0), loadedText.length - 1);
             scrollInterp = scroll;
           }
-          ticking = false;
+          scrollTicking = false;
         });
-        ticking = true;
+        scrollTicking = true;
       }
     });
-
-    window.addEventListener('blur', () => {
-      caretVisible = false;
-    });
-    window.addEventListener('focus', () => {
-      caretVisible = true;
-    });
+    // keyboard inputs
     document.addEventListener('keydown', (e) => {
       let deselect = false; // this keeps track of certain keys that should reset selection
       if (e.key.length == 1) {
@@ -1631,6 +1614,7 @@ const sketch = (p5: p5) => {
         modifiers[e.key as keyof Imodifiers] = false;
       }
     });
+    // clipboard inputs
     document.addEventListener('copy', () => {
       if (selection.active) {
         setEnergy(energy + growthRate);
@@ -1660,10 +1644,7 @@ const sketch = (p5: p5) => {
       paste(loadedText);
     });
 
-    document.getElementById('resizeHandle')?.addEventListener('mousedown', () => {
-      modifiers.Resizing = true;
-    });
-
+    // file i/o startup procedure
     exists('open.it', { dir: BaseDirectory.Temp }).then((e) => {
       if (e) {
         removeFile('open.it', { dir: BaseDirectory.Temp });
@@ -1691,7 +1672,7 @@ const sketch = (p5: p5) => {
   //
   //
   //
-  //
+  // end p5 setup
   //
   //
   //
@@ -1701,26 +1682,7 @@ const sketch = (p5: p5) => {
 
   // main loop
   p5.draw = () => {
-    // graphical pipeline:
-    //
-    // draw 3 jiggling rectangles (C, M, Y) onto windowGraphics with EXCLUDE blendmode
-    // draw windowGraphics onto canvas through glow shader
-    // draw phospherescence (random points) onto canvas
-    // draw text onto textGraphics
-    // draw titlebar onto textGraphics
-    // draw textGraphics onto canvas through chroma shader (which masks everything against the un-shaded windowGraphics buffer)
-    //
-
-    if (typeClock > typeDelay) {
-      setEnergy(energy - decayRate);
-    }
-
-    caretClock++;
-    mouseClock++;
-    typeClock++;
-    typeClockSmooth += (typeClock - typeClockSmooth) * 0.1;
-    saveFlash *= 0.9;
-
+    // scrolling stuff
     // smooth mouse drag scrolling
     if (modifiers.Mouse1) {
       if (p5.mouseY > p5.height - 10) {
@@ -1731,7 +1693,7 @@ const sketch = (p5: p5) => {
         mouseMoved(loadedText);
       }
     }
-
+    // smooth scrolling
     if (scrollInterp != scroll) {
       scrollInterp += (scroll - scrollInterp) * 0.25;
       if (Math.abs(scroll - scrollInterp) < 0.02) {
@@ -1742,7 +1704,32 @@ const sketch = (p5: p5) => {
     // unique drawing processes per theme
     switch (theme) {
       case Themes.dark_chroma:
-        clock += energy; // tick animations
+        // graphical pipeline:
+        //
+        // draw 3 jiggling rectangles (C, M, Y) onto windowGraphics with EXCLUDE blendmode
+        // draw windowGraphics onto canvas through glow shader
+        // draw phospherescence (random points) onto canvas
+        // draw text onto textGraphics
+        // draw titlebar onto textGraphics
+        // draw shadows onto textGraphics
+        // draw textGraphics onto canvas through chroma shader (which masks everything against the un-shaded windowGraphics buffer)
+        //
+
+        if (typeClock > typeDelay) {
+          setEnergy(energy - decayRate);
+        }
+
+        if (saveEffect) {
+          saveEffect = false;
+          saveFlash = saveFlashStr;
+        }
+
+        energyClock += energy; // tick animations
+        caretClock++;
+        mouseClock++;
+        typeClock++;
+        typeClockSmooth += (typeClock - typeClockSmooth) * 0.1;
+        saveFlash *= 0.9;
 
         // clear main window and shaded graphics
         p5.clear(0.0, 0.0, 0.0, 0.0);
@@ -1750,12 +1737,12 @@ const sketch = (p5: p5) => {
         windowGraphics.clear(0.0, 0.0, 0.0, 0.0);
 
         // calculate coordinate offsets for each of the 3 layers
-        p1x = p5.cos(clock * speed) * split;
-        p1y = p5.sin(clock * speed) * split;
-        p2x = p5.cos(clock * speed * 1.5 + 120) * split;
-        p2y = p5.sin(clock * speed * 1.5 + 120) * split;
-        p3x = p5.cos(clock * speed * 2 + 240) * split;
-        p3y = p5.sin(clock * speed * 2 + 240) * split;
+        p1x = p5.cos(energyClock * speed) * split;
+        p1y = p5.sin(energyClock * speed) * split;
+        p2x = p5.cos(energyClock * speed * 1.5 + 120) * split;
+        p2y = p5.sin(energyClock * speed * 1.5 + 120) * split;
+        p3x = p5.cos(energyClock * speed * 2 + 240) * split;
+        p3y = p5.sin(energyClock * speed * 2 + 240) * split;
 
         // draw 3 jiggling colored rectangles with exclusion blendmode
         windowGraphics.push();
@@ -1764,10 +1751,10 @@ const sketch = (p5: p5) => {
         windowGraphics.push();
         windowGraphics.fill(255, 255, 0);
         windowGraphics.stroke(255, 255, 0, 127);
-        windowGraphics.rotate(p5.cos(clock * speed * 1.5) * twist);
+        windowGraphics.rotate(p5.cos(energyClock * speed * 1.5) * twist);
         windowGraphics.rect(
-          -halfWidth + pageMargin + p1x,
-          -halfHeight + pageMargin + p1y,
+          -hw + pageMargin + p1x,
+          -hh + pageMargin + p1y,
           p5.width - pageMargin * 2,
           p5.height - pageMargin * 2,
           cornerRadius,
@@ -1779,10 +1766,10 @@ const sketch = (p5: p5) => {
         windowGraphics.push();
         windowGraphics.fill(0, 255, 240);
         windowGraphics.stroke(0, 255, 240, 127);
-        windowGraphics.rotate(p5.cos(clock * speed * 2) * twist);
+        windowGraphics.rotate(p5.cos(energyClock * speed * 2) * twist);
         windowGraphics.rect(
-          -halfWidth + pageMargin + p2x,
-          -halfHeight + pageMargin + p2y,
+          -hw + pageMargin + p2x,
+          -hh + pageMargin + p2y,
           p5.width - pageMargin * 2,
           p5.height - pageMargin * 2,
           cornerRadius,
@@ -1794,10 +1781,10 @@ const sketch = (p5: p5) => {
         windowGraphics.push();
         windowGraphics.fill(255, 0, 240);
         windowGraphics.stroke(255, 0, 240, 127);
-        windowGraphics.rotate(p5.cos(clock * speed * 2.5) * twist);
+        windowGraphics.rotate(p5.cos(energyClock * speed * 2.5) * twist);
         windowGraphics.rect(
-          -halfWidth + pageMargin + p3x,
-          -halfHeight + pageMargin + p3y,
+          -hw + pageMargin + p3x,
+          -hh + pageMargin + p3y,
           p5.width - pageMargin * 2,
           p5.height - pageMargin * 2,
           cornerRadius,
@@ -1815,9 +1802,9 @@ const sketch = (p5: p5) => {
         p5.shader(perlinGlow);
         perlinGlow.setUniform('u_texture', windowGraphics);
         perlinGlow.setUniform('u_resolution', [p5.width, p5.height]);
-        perlinGlow.setUniform('u_clock', clock * 0.003);
+        perlinGlow.setUniform('u_clock', energyClock * 0.003);
         perlinGlow.setUniform('u_energy', energy);
-        p5.rect(-halfWidth, -halfHeight, p5.width, p5.height);
+        p5.rect(-hw, -hh, p5.width, p5.height);
         p5.pop();
 
         // draw random noise pixels
@@ -1830,8 +1817,8 @@ const sketch = (p5: p5) => {
           p5.stroke(p5.random(0, 80 + 40 * energy), 0, p5.random(64, 175 + 40 * energy));
           p5.strokeWeight(p5.random(0.5, 3));
           p5.point(
-            p5.random(-halfWidth + textMarginLeft * 0.5, halfWidth - textMarginLeft * 0.5),
-            p5.random(-halfHeight + textMarginTop * 0.5, halfHeight - textMarginTop * 0.5)
+            p5.random(-hw + textMarginLeft * 0.5, hw - textMarginLeft * 0.5),
+            p5.random(-hh + textMarginTop * 0.5, hh - textMarginTop * 0.5)
           );
         }
         p5.pop();
@@ -1852,80 +1839,71 @@ const sketch = (p5: p5) => {
             if (selection.forward) {
               if (caretLine - sbln == 0) {
                 // one line selections
-                sx = -halfWidth + sbch * charW + textMarginLeft;
-                sy =
-                  -halfHeight +
-                  (caretLine - scrollInterp) * lineH +
-                  textMarginTop +
-                  fontSize * 0.25; // bottom
-                w = (caretChar - sbch) * charW; // difference between caretChar and sbch
+                sx = -hw + sbch * charW + textMarginLeft;
+                sy = -hh + (caretLine - scrollInterp) * lineH + textMarginTop + fontSize * 0.25; // bottom
+                sw = (caretChar - sbch) * charW; // difference between caretChar and sbch
               } else if (i == start) {
                 // multi-line selections, first line
-                sx = -halfWidth + sbch * charW + textMarginLeft;
-                sy = -halfHeight + (start - scrollInterp) * lineH + textMarginTop + fontSize * 0.25; // bottom
-                w = (loadedText[start].length - sbch + 1) * charW; // difference between line length and sbch
+                sx = -hw + sbch * charW + textMarginLeft;
+                sy = -hh + (start - scrollInterp) * lineH + textMarginTop + fontSize * 0.25; // bottom
+                sw = (loadedText[start].length - sbch + 1) * charW; // difference between line length and sbch
               } else if (i < end) {
                 // multi-line selections, intermediate lines
-                sx = -halfWidth + textMarginLeft;
+                sx = -hw + textMarginLeft;
                 sy =
-                  -halfHeight +
+                  -hh +
                   (start - scrollInterp + (i - start)) * lineH +
                   textMarginTop +
                   fontSize * 0.25; // bottom
-                w = (loadedText[start + (i - start)].length + 1) * charW; // line length
+                sw = (loadedText[start + (i - start)].length + 1) * charW; // line length
               } else {
                 // multi-line selections, last line
-                sx = -halfWidth + textMarginLeft;
+                sx = -hw + textMarginLeft;
                 sy =
-                  -halfHeight +
+                  -hh +
                   (start - scrollInterp + (i - start)) * lineH +
                   textMarginTop +
                   fontSize * 0.25; // bottom
-                w = caretChar * charW; // line length
+                sw = caretChar * charW; // line length
               }
             } else {
               // reverse selections
               if (caretLine - sbln == 0) {
                 // one line selections
-                sx = -halfWidth + sbch * charW + textMarginLeft;
-                sy =
-                  -halfHeight +
-                  (caretLine - scrollInterp) * lineH +
-                  textMarginTop +
-                  fontSize * 0.25; // bottom
-                w = (caretChar - sbch) * charW; // difference between caretChar and sbch
+                sx = -hw + sbch * charW + textMarginLeft;
+                sy = -hh + (caretLine - scrollInterp) * lineH + textMarginTop + fontSize * 0.25; // bottom
+                sw = (caretChar - sbch) * charW; // difference between caretChar and sbch
               } else if (i == start) {
                 // multi-line selections, first line
-                sx = -halfWidth + sbch * charW + textMarginLeft;
-                sy = -halfHeight + (sbln - scrollInterp) * lineH + textMarginTop + fontSize * 0.25; // bottom
+                sx = -hw + sbch * charW + textMarginLeft;
+                sy = -hh + (sbln - scrollInterp) * lineH + textMarginTop + fontSize * 0.25; // bottom
                 // this whole thing is a dumpster fire; the bottom line of a reverse selection can technically be rendered at infinite distance
-                w = -sbch * charW; // difference between line length and sbch
+                sw = -sbch * charW; // difference between line length and sbch
               } else if (i < end) {
                 // multi-line selections, intermediate lines
                 // even tho this is reverse selection, it's easier to draw the rect from left to right here.
-                sx = -halfWidth + textMarginLeft;
+                sx = -hw + textMarginLeft;
                 sy =
-                  -halfHeight +
+                  -hh +
                   (end - scrollInterp - (i - start)) * lineH +
                   textMarginTop +
                   fontSize * 0.25; // bottom
-                w = (loadedText[end - (i - start)].length + 1) * charW; // line length
+                sw = (loadedText[end - (i - start)].length + 1) * charW; // line length
               } else {
                 // multi-line selections, last line
-                sx =
-                  -halfWidth + (loadedText[end - (i - start)].length + 1) * charW + textMarginLeft; // right end
+                sx = -hw + (loadedText[end - (i - start)].length + 1) * charW + textMarginLeft; // right end
                 sy =
-                  -halfHeight +
+                  -hh +
                   (end - scrollInterp - (i - start)) * lineH +
                   textMarginTop +
                   fontSize * 0.25; // bottom
-                w = (caretChar - 1) * charW - loadedText[end - (i - start)].length * charW; // line length
+                sw = (caretChar - 1) * charW - loadedText[end - (i - start)].length * charW; // line length
               }
             }
-            if (!w && ((selection.forward && i < end) || (!selection.forward && i != start)))
+            if (!sw && ((selection.forward && i < end) || (!selection.forward && i != start)))
               // this big logical statement makes the selection appear as expected when selecting empty lines
-              w = charW; // show empty lines and end of line selections
-            textGraphics.rect(sx, sy, w, -lineH);
+              sw = charW; // show empty lines and end of line selections
+            textGraphics.rect(sx, sy, sw, -lineH);
           }
           textGraphics.pop();
         }
@@ -1940,8 +1918,8 @@ const sketch = (p5: p5) => {
         ) {
           textGraphics.text(
             loadedText[i],
-            -halfWidth + textMarginLeft,
-            -halfHeight + textMarginTop + lineH * (i - scrollInterp)
+            -hw + textMarginLeft,
+            -hh + textMarginTop + lineH * (i - scrollInterp)
           );
         }
         textGraphics.pop();
@@ -1951,11 +1929,11 @@ const sketch = (p5: p5) => {
           if (p5.sin(caretClock * 6) > 0) {
             textGraphics.push();
             textGraphics.stroke(255, 240, 210 - 15 * energy); // same as text color
-            textGraphics.strokeWeight(scaleFactor);
+            textGraphics.strokeWeight(sf);
             textGraphics.strokeCap(p5.SQUARE);
-            caretX = Math.round(-halfWidth + caretChar * charW + textMarginLeft) + 0.5;
-            caretY = Math.round(
-              -halfHeight + (caretLine - scrollInterp) * lineH + textMarginTop + fontSize * 0.25
+            let caretX = Math.round(-hw + caretChar * charW + textMarginLeft) + 0.5;
+            let caretY = Math.round(
+              -hh + (caretLine - scrollInterp) * lineH + textMarginTop + fontSize * 0.25
             ); // bottom
             textGraphics.line(caretX, caretY, caretX, caretY - lineH);
             textGraphics.pop();
@@ -1966,18 +1944,18 @@ const sketch = (p5: p5) => {
         textGraphics.push();
         textGraphics.noStroke();
         textGraphics.fill(70 + saveFlash, 80 + saveFlash, 90 + saveFlash, 255);
-        textGraphics.rect(-halfWidth, -halfHeight, p5.width, 32);
+        textGraphics.rect(-hw, -hh, p5.width, 32);
         // draw shadow under the title bar
         let shadowMargin = pageMargin * 0.5;
         let shadowSize = 38 * (energy / 3.0) * (1 - typeClockSmooth / typeDelay);
         let shadowAlpha = 127;
         textGraphics.beginShape(); // top
         textGraphics.fill(0, 0, 0, 160);
-        textGraphics.vertex(-halfWidth, -halfHeight + 32);
-        textGraphics.vertex(halfWidth, -halfHeight + 32);
+        textGraphics.vertex(-hw, -hh + 32);
+        textGraphics.vertex(hw, -hh + 32);
         textGraphics.fill(0, 0, 0, 0);
-        textGraphics.vertex(halfWidth, -halfHeight + 48);
-        textGraphics.vertex(-halfWidth, -halfHeight + 48);
+        textGraphics.vertex(hw, -hh + 48);
+        textGraphics.vertex(-hw, -hh + 48);
         textGraphics.endShape(p5.CLOSE);
         // draw document title
         textGraphics.fill(230, 230, 255);
@@ -1985,48 +1963,30 @@ const sketch = (p5: p5) => {
         textGraphics.text(
           loadedFileName,
           -textGraphics.textWidth(loadedFileName) / 2,
-          -halfHeight + 24 + energy
+          -hh + 24 + energy
         );
         textGraphics.textSize(fontSize);
         // shadow all around (except left side)
         textGraphics.beginShape();
         textGraphics.fill(0, 0, 0, shadowAlpha);
-        textGraphics.vertex(-halfWidth + shadowMargin, -halfHeight + shadowMargin); // top left
-        textGraphics.vertex(halfWidth - shadowMargin, -halfHeight + shadowMargin); // top right
-        textGraphics.vertex(halfWidth - shadowMargin, halfHeight - shadowMargin); // bottom right
-        textGraphics.vertex(-halfWidth + shadowMargin, halfHeight - shadowMargin); // bottom left
+        textGraphics.vertex(-hw + shadowMargin, -hh + shadowMargin); // top left
+        textGraphics.vertex(hw - shadowMargin, -hh + shadowMargin); // top right
+        textGraphics.vertex(hw - shadowMargin, hh - shadowMargin); // bottom right
+        textGraphics.vertex(-hw + shadowMargin, hh - shadowMargin); // bottom left
         textGraphics.fill(0, 0, 0, 0);
-        textGraphics.vertex(
-          -halfWidth + shadowMargin + shadowSize,
-          halfHeight - shadowMargin - shadowSize
-        ); // bottom left inner
-        textGraphics.vertex(
-          halfWidth - shadowMargin - shadowSize,
-          halfHeight - shadowMargin - shadowSize
-        ); // bottom right inner
-        textGraphics.vertex(
-          halfWidth - shadowMargin - shadowSize,
-          -halfHeight + shadowMargin + shadowSize
-        ); // top right inner
-        textGraphics.vertex(
-          -halfWidth + shadowMargin + shadowSize,
-          -halfHeight + shadowMargin + shadowSize
-        ); // top left inner
+        textGraphics.vertex(-hw + shadowMargin + shadowSize, hh - shadowMargin - shadowSize); // bottom left inner
+        textGraphics.vertex(hw - shadowMargin - shadowSize, hh - shadowMargin - shadowSize); // bottom right inner
+        textGraphics.vertex(hw - shadowMargin - shadowSize, -hh + shadowMargin + shadowSize); // top right inner
+        textGraphics.vertex(-hw + shadowMargin + shadowSize, -hh + shadowMargin + shadowSize); // top left inner
         textGraphics.endShape(p5.CLOSE);
         // left side
         textGraphics.beginShape();
         textGraphics.fill(0, 0, 0, shadowAlpha);
-        textGraphics.vertex(-halfWidth + shadowMargin, -halfHeight + shadowMargin); // top left
-        textGraphics.vertex(-halfWidth + shadowMargin, halfHeight - shadowMargin); // bottom left
+        textGraphics.vertex(-hw + shadowMargin, -hh + shadowMargin); // top left
+        textGraphics.vertex(-hw + shadowMargin, hh - shadowMargin); // bottom left
         textGraphics.fill(0, 0, 0, 0);
-        textGraphics.vertex(
-          -halfWidth + shadowMargin + shadowSize,
-          halfHeight - shadowMargin - shadowSize
-        ); // bottom left inner
-        textGraphics.vertex(
-          -halfWidth + shadowMargin + shadowSize,
-          -halfHeight + shadowMargin + shadowSize
-        ); // top left inner
+        textGraphics.vertex(-hw + shadowMargin + shadowSize, hh - shadowMargin - shadowSize); // bottom left inner
+        textGraphics.vertex(-hw + shadowMargin + shadowSize, -hh + shadowMargin + shadowSize); // top left inner
         textGraphics.endShape(p5.CLOSE);
 
         // draw text through chroma shader
@@ -2037,9 +1997,9 @@ const sketch = (p5: p5) => {
         perlinChroma.setUniform('u_texture', textGraphics); // pass the graphics buffer into the shader as a sampler2D
         perlinChroma.setUniform('u_mask', windowGraphics); // pass the graphics buffer into the shader as a sampler2D
         perlinChroma.setUniform('u_resolution', [p5.width, p5.height]); // pass the graphics buffer into the shader as a sampler2D
-        perlinChroma.setUniform('u_clock', clock); // pass the graphics buffer into the shader as a sampler2D
+        perlinChroma.setUniform('u_clock', energyClock); // pass the graphics buffer into the shader as a sampler2D
         perlinChroma.setUniform('u_energy', energy); // pass the graphics buffer into the shader as a sampler2D
-        p5.rect(-halfWidth, -halfHeight, p5.width, p5.height); // a container (the size of graphics1) to draw graphics1 through the shader
+        p5.rect(-hw, -hh, p5.width, p5.height); // a container (the size of graphics1) to draw graphics1 through the shader
         p5.pop(); // this resets the shader, otherwise need to call resetShader()
 
         break;
