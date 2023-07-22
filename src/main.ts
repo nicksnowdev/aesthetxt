@@ -145,6 +145,7 @@ const sketch = (p5: p5) => {
   // undo/redo command class and history array
   const commandHistory: any[] = [];
   let commandIndex = -1;
+  const undoMaxLength = 512;
   class Command {
     func: Function;
     funcArgs: any;
@@ -268,7 +269,7 @@ const sketch = (p5: p5) => {
             false // forward redo?
           )
         );
-        if (commandHistory.length <= 512) commandIndex++;
+        if (commandHistory.length <= undoMaxLength) commandIndex++;
         else commandHistory.shift();
       }
     }
@@ -342,7 +343,7 @@ const sketch = (p5: p5) => {
           false // forward redo?
         )
       );
-      if (commandHistory.length <= 512) commandIndex++;
+      if (commandHistory.length <= undoMaxLength) commandIndex++;
       else commandHistory.shift();
     }
   };
@@ -421,7 +422,7 @@ const sketch = (p5: p5) => {
               true // forward redo?
             )
           );
-          if (commandHistory.length <= 512) commandIndex++;
+          if (commandHistory.length <= undoMaxLength) commandIndex++;
           else commandHistory.shift();
         }
       }
@@ -497,7 +498,7 @@ const sketch = (p5: p5) => {
           true // forward redo?
         )
       );
-      if (commandHistory.length <= 512) commandIndex++;
+      if (commandHistory.length <= undoMaxLength) commandIndex++;
       else commandHistory.shift();
     }
   };
@@ -545,7 +546,7 @@ const sketch = (p5: p5) => {
             false
           )
         );
-        if (commandHistory.length <= 512) commandIndex++;
+        if (commandHistory.length <= undoMaxLength) commandIndex++;
         else commandHistory.shift();
       }
     }
@@ -1700,7 +1701,6 @@ const sketch = (p5: p5) => {
         scrollInterp = scroll;
       }
     }
-
     // unique drawing processes per theme
     switch (theme) {
       case Themes.dark_chroma:
@@ -1714,28 +1714,23 @@ const sketch = (p5: p5) => {
         // draw shadows onto textGraphics
         // draw textGraphics onto canvas through chroma shader (which masks everything against the un-shaded windowGraphics buffer)
         //
-
         if (typeClock > typeDelay) {
           setEnergy(energy - decayRate);
         }
-
         if (saveEffect) {
           saveEffect = false;
           saveFlash = saveFlashStr;
         }
-
         energyClock += energy; // tick animations
         caretClock++;
         mouseClock++;
         typeClock++;
         typeClockSmooth += (typeClock - typeClockSmooth) * 0.1;
         saveFlash *= 0.9;
-
         // clear main window and shaded graphics
         p5.clear(0.0, 0.0, 0.0, 0.0);
         textGraphics.clear(0.0, 0.0, 0.0, 0.0);
         windowGraphics.clear(0.0, 0.0, 0.0, 0.0);
-
         // calculate coordinate offsets for each of the 3 layers
         p1x = p5.cos(energyClock * speed) * split;
         p1y = p5.sin(energyClock * speed) * split;
@@ -1743,7 +1738,6 @@ const sketch = (p5: p5) => {
         p2y = p5.sin(energyClock * speed * 1.5 + 120) * split;
         p3x = p5.cos(energyClock * speed * 2 + 240) * split;
         p3y = p5.sin(energyClock * speed * 2 + 240) * split;
-
         // draw 3 jiggling colored rectangles with exclusion blendmode
         windowGraphics.push();
         windowGraphics.strokeWeight(0.5);
@@ -1794,7 +1788,6 @@ const sketch = (p5: p5) => {
         );
         windowGraphics.pop();
         windowGraphics.pop();
-
         // draw window through glow shader
         p5.push();
         p5.fill(255);
@@ -1806,7 +1799,6 @@ const sketch = (p5: p5) => {
         perlinGlow.setUniform('u_energy', energy);
         p5.rect(-hw, -hh, p5.width, p5.height);
         p5.pop();
-
         // draw random noise pixels
         p5.push();
         for (
@@ -1822,7 +1814,6 @@ const sketch = (p5: p5) => {
           );
         }
         p5.pop();
-
         // draw selection
         if (selection.active) {
           textGraphics.push();
@@ -1907,7 +1898,6 @@ const sketch = (p5: p5) => {
           }
           textGraphics.pop();
         }
-
         // draw text line by line
         textGraphics.push();
         textGraphics.fill(255, 240 - 10 * energy, 210 - 15 * energy);
@@ -1923,7 +1913,6 @@ const sketch = (p5: p5) => {
           );
         }
         textGraphics.pop();
-
         // draw caret
         if (caretVisible) {
           if (p5.sin(caretClock * 6) > 0) {
@@ -1939,7 +1928,6 @@ const sketch = (p5: p5) => {
             textGraphics.pop();
           }
         }
-
         // cover top with title bar
         textGraphics.push();
         textGraphics.noStroke();
@@ -1957,7 +1945,10 @@ const sketch = (p5: p5) => {
         textGraphics.vertex(hw, -hh + 48);
         textGraphics.vertex(-hw, -hh + 48);
         textGraphics.endShape(p5.CLOSE);
+        textGraphics.pop();
         // draw document title
+        textGraphics.push();
+        textGraphics.noStroke();
         textGraphics.fill(230, 230, 255);
         textGraphics.textSize(16);
         textGraphics.text(
@@ -1965,8 +1956,9 @@ const sketch = (p5: p5) => {
           -textGraphics.textWidth(loadedFileName) / 2,
           -hh + 24 + energy
         );
-        textGraphics.textSize(fontSize);
+        textGraphics.pop();
         // shadow all around (except left side)
+        textGraphics.push();
         textGraphics.beginShape();
         textGraphics.fill(0, 0, 0, shadowAlpha);
         textGraphics.vertex(-hw + shadowMargin, -hh + shadowMargin); // top left
@@ -1988,7 +1980,7 @@ const sketch = (p5: p5) => {
         textGraphics.vertex(-hw + shadowMargin + shadowSize, hh - shadowMargin - shadowSize); // bottom left inner
         textGraphics.vertex(-hw + shadowMargin + shadowSize, -hh + shadowMargin + shadowSize); // top left inner
         textGraphics.endShape(p5.CLOSE);
-
+        textGraphics.pop();
         // draw text through chroma shader
         p5.push();
         p5.fill(255);
@@ -2001,7 +1993,6 @@ const sketch = (p5: p5) => {
         perlinChroma.setUniform('u_energy', energy); // pass the graphics buffer into the shader as a sampler2D
         p5.rect(-hw, -hh, p5.width, p5.height); // a container (the size of graphics1) to draw graphics1 through the shader
         p5.pop(); // this resets the shader, otherwise need to call resetShader()
-
         break;
     }
   };
